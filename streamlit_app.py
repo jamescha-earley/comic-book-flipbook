@@ -215,6 +215,10 @@ HTML_TEMPLATE = r"""<!doctype html>
   let current = 0;
   let animating = false;
 
+  // How many pages to show in page-flip mode before auto-switching to Read mode.
+  // Set to 0 to start in Read mode immediately; set to PAGES.length to never auto-switch.
+  const PAGE_VIEW_LIMIT = 2;
+
   // === Page mode ===
 
   const src = (i) => PAGES[i].src;
@@ -241,6 +245,10 @@ HTML_TEMPLATE = r"""<!doctype html>
       flipper.classList.remove("active", "flip-forward", "flip-backward");
       current = targetIdx;
       animating = false;
+      // Auto-switch to Read mode once we cross the page-view boundary
+      if (current >= PAGE_VIEW_LIMIT) {
+        setReadMode(true);
+      }
       updateHud();
     };
     flipper.addEventListener("animationend", onEnd);
@@ -296,10 +304,19 @@ HTML_TEMPLATE = r"""<!doctype html>
     } else {
       if (scrollY <= 1) {
         if (current > 0) {
-          animating = true;
-          current -= 1;
-          loadReaderPage(current, true);
-          setTimeout(() => { animating = false; updateHud(); }, 50);
+          const targetIdx = current - 1;
+          // If the previous page is in the page-view range, hand off to page mode
+          if (targetIdx < PAGE_VIEW_LIMIT) {
+            // Exit read mode displaying current page first, then flip backward to target
+            setReadMode(false);
+            // setReadMode(false) calls setStatic(current); now flip from current to target
+            flipTo(targetIdx);
+          } else {
+            animating = true;
+            current = targetIdx;
+            loadReaderPage(current, true);
+            setTimeout(() => { animating = false; updateHud(); }, 50);
+          }
         }
       } else {
         scrollY = Math.max(0, scrollY - step);
@@ -330,8 +347,9 @@ HTML_TEMPLATE = r"""<!doctype html>
     setReadMode(!isReadMode());
   });
 
-  // Auto-enter read mode on small (mobile) viewports
-  if (window.innerWidth <= 700) {
+  // Auto-enter read mode on small (mobile) viewports, unless the user wants
+  // to see the first few pages with the page-flip animation first.
+  if (PAGE_VIEW_LIMIT === 0 || (window.innerWidth <= 700 && PAGE_VIEW_LIMIT === 0)) {
     setReadMode(true);
   }
 
