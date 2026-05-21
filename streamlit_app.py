@@ -301,14 +301,26 @@ HTML_TEMPLATE = r"""<!doctype html>
     const dw = r.width, dh = r.height;
     if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
     const vw = window.innerWidth, vh = window.innerHeight;
-    // Zoom factor: >1 means stop content overflows the viewport slightly
-    // (clipped by .reader overflow:hidden). Tweak to taste.
-    const ZOOM = 1.20;
-    const s = Math.min(vw / (stop.w * dw), vh / (stop.h * dh)) * ZOOM;
+    const ZOOM = 1.00;  // 1.0 = stop just fits viewport
+    // Scale to fit the stop, but never below "cover the viewport" so that
+    // the black background doesn't peek out at the edges.
+    const s = Math.max(
+      Math.min(vw / (stop.w * dw), vh / (stop.h * dh)) * ZOOM,
+      vw / dw,
+      vh / dh
+    );
     const cx = (stop.x + stop.w / 2) * dw;
     const cy = (stop.y + stop.h / 2) * dh;
-    const tx = -(cx - dw / 2) * s;
-    const ty = -(cy - dh / 2) * s;
+    let tx = -(cx - dw / 2) * s;
+    let ty = -(cy - dh / 2) * s;
+    // Clamp translate so the image edges stick to the viewport edges
+    // (no black visible around the panel).
+    const maxTx = dw * s / 2 - vw / 2;
+    const maxTy = dh * s / 2 - vh / 2;
+    if (maxTx > 0) tx = Math.max(-maxTx, Math.min(maxTx, tx));
+    else tx = 0;
+    if (maxTy > 0) ty = Math.max(-maxTy, Math.min(maxTy, ty));
+    else ty = 0;
     return { tx, ty, s };
   }
 
