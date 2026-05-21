@@ -331,37 +331,71 @@ HTML_TEMPLATE = r"""<!doctype html>
       return;
     }
 
-    // Page change: snap zoom to identity then run 3D flip
+    // Page change. Make the motion continuous so the user never sees an
+    // unintended "full page" flash:
+    //   forward (panel of N -> full of N+1):
+    //     smooth zoom-out to full N -> flip -> land on full N+1
+    //   backward (full of N+1 -> last panel of N):
+    //     flip -> land on full N -> smooth zoom into last panel of N
     animating = true;
-    applyTransform({ tx: 0, ty: 0, s: 1 }, false);
     const forward = newStep.pageIdx > oldStep.pageIdx;
+    const wasZoomedIn = oldStep.panelIdx !== -1;
 
-    if (forward) {
-      frontImg.src = src(oldStep.pageIdx);
-      setStatic(newStep.pageIdx);
-      flipper.classList.add("active", "flip-forward");
-    } else {
-      frontImg.src = src(newStep.pageIdx);
-      flipper.classList.add("active", "flip-backward");
-    }
-
-    const onEnd = () => {
-      flipper.removeEventListener("animationend", onEnd);
-      if (!forward) setStatic(newStep.pageIdx);
-      flipper.classList.remove("active", "flip-forward", "flip-backward");
-      stepIdx = newIdx;
-      animating = false;
-      // Recompute panel scale for the new page (image dims may differ)
-      pagePanelScale[newStep.pageIdx] = null;
-      // After landing on new page, if target step is a panel, smoothly camera-pan in
-      if (newStep.panelIdx !== -1) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => applyStepTransform(newStep, true));
-        });
+    const startFlip = () => {
+      if (forward) {
+        frontImg.src = src(oldStep.pageIdx);
+        setStatic(newStep.pageIdx);
+        flipper.classList.add("active", "flip-forward");
+      } else {
+        frontImg.src = src(newStep.pageIdx);
+        flipper.classList.add("active", "flip-backward");
       }
-      updateHud();
+      const onFlipEnd = () => {
+        flipper.removeEventListener("animationend", onFlipEnd);
+        if (!forward) setStatic(newStep.pageIdx);
+        flipper.classList.remove("active", "flip-forward", "flip-backward");
+        stepIdx = newIdx;
+        // Recompute panel scale for the new page
+        pagePanelScale[newStep.pageIdx] = null;
+        if (newStep.panelIdx !== -1) {
+          // Smoothly camera-pan into the target panel after landing
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              applyStepTransform(newStep, true);
+              const onZoomEnd = () => {
+                book.removeEventListener("transitionend", onZoomEnd);
+                animating = false;
+              };
+              book.addEventListener("transitionend", onZoomEnd, { once: true });
+              // Safety: in case transitionend doesn't fire
+              setTimeout(() => { animating = false; }, 900);
+            });
+          });
+        } else {
+          animating = false;
+        }
+        updateHud();
+      };
+      flipper.addEventListener("animationend", onFlipEnd);
     };
-    flipper.addEventListener("animationend", onEnd);
+
+    if (wasZoomedIn) {
+      // Smooth zoom-out to full of the current page, then flip
+      applyTransform({ tx: 0, ty: 0, s: 1 }, true);
+      const onZoomOutEnd = () => {
+        book.removeEventListener("transitionend", onZoomOutEnd);
+        startFlip();
+      };
+      book.addEventListener("transitionend", onZoomOutEnd, { once: true });
+      // Safety in case transitionend doesn't fire
+      setTimeout(() => {
+        book.removeEventListener("transitionend", onZoomOutEnd);
+        if (!flipper.classList.contains("active")) startFlip();
+      }, 850);
+    } else {
+      // Already at full page of N+1 (only happens going backward across a boundary)
+      startFlip();
+    }
   }
 
   function goPrev() { gotoStep(stepIdx - 1); }
