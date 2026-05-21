@@ -158,7 +158,6 @@ HTML_TEMPLATE = r"""<!doctype html>
   <div class="nav-zone right" id="nav-right"></div>
   <div class="nav-hint right">&#8250;</div>
   <div class="hud" id="hud">Loading…</div>
-  <div id="logbox" style="position:fixed;top:8px;right:8px;max-width:60%;max-height:50%;overflow:auto;background:rgba(0,0,0,.75);color:#9cf;font:11px/1.3 monospace;padding:6px 8px;border-radius:6px;z-index:200;display:none;"></div>
   <div class="instructions" id="instructions">Tap right / left or use arrow keys to navigate panels</div>
 
 <script src="https://cdn.jsdelivr.net/npm/openseadragon@5.0/build/openseadragon/openseadragon.min.js"></script>
@@ -172,19 +171,9 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   const hud = document.getElementById('hud');
   const instructions = document.getElementById('instructions');
-  const logbox = document.getElementById('logbox');
 
-  function log(msg) {
-    console.log('[osd]', msg);
-    if (logbox) {
-      logbox.style.display = 'block';
-      const line = document.createElement('div');
-      line.textContent = msg;
-      logbox.appendChild(line);
-      logbox.scrollTop = logbox.scrollHeight;
-    }
-  }
-  window.addEventListener('error', function(e) { log('JS error: ' + e.message); });
+  function log(msg) { console.log('[osd]', msg); }
+  window.addEventListener('error', function(e) { console.error('[osd] JS error:', e.message); });
 
   // Fade out instructions after 4 seconds
   setTimeout(() => { instructions.style.opacity = '0'; }, 4000);
