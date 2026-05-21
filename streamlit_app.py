@@ -116,8 +116,11 @@ HTML_TEMPLATE = r"""<!doctype html>
     -webkit-touch-callout: none;
   }
 
+  /* Viewport clips the page so only what's "in frame" is visible.
+     This is what creates the illusion of a camera panning over a fixed comic. */
   .stage {
     position: fixed; inset: 0;
+    overflow: hidden;
     display: flex; align-items: center; justify-content: center;
     perspective: 2200px;
   }
@@ -126,6 +129,9 @@ HTML_TEMPLATE = r"""<!doctype html>
     display: inline-block;
     line-height: 0;
     transform-style: preserve-3d;
+    transform-origin: center center;
+    transition: transform 750ms var(--ease);
+    will-change: transform;
   }
   .static-page {
     display: block;
@@ -133,18 +139,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     max-height: calc(100vh - 60px);
     border-radius: 4px;
     background: #000;
-    transform-origin: center center;
-    transition: transform 650ms var(--ease);
-    will-change: transform;
-  }
-  /* Drop shadow on the wrapper so it stays in place when the image scales */
-  .book::before {
-    content: "";
-    position: absolute; inset: 0;
-    border-radius: 4px;
     box-shadow: var(--shadow);
-    pointer-events: none;
-    z-index: -1;
   }
 
   /* Flipper covers the natural-size .book area */
@@ -248,6 +243,11 @@ HTML_TEMPLATE = r"""<!doctype html>
   let stepIdx = 0;
   let animating = false;
 
+  // Per-page uniform panel scale: same scale for every panel on a given page,
+  // so that panel-to-panel transitions are pure translate (true camera pan).
+  // Computed lazily once the page image has laid out.
+  const pagePanelScale = new Array(PAGES.length).fill(null);
+
   const src = (i) => PAGES[i].src;
   function setStatic(idx) { staticImg.src = src(idx); }
 
@@ -256,40 +256,63 @@ HTML_TEMPLATE = r"""<!doctype html>
     return PAGES[step.pageIdx].panels[step.panelIdx] || null;
   }
 
-  function computeTransform(panel) {
-    if (!panel) return { tx: 0, ty: 0, s: 1 };
-    const r = staticImg.getBoundingClientRect();
+  function imgRect() { return staticImg.getBoundingClientRect(); }
+
+  function computePagePanelScale(pageIdx) {
+    const r = imgRect();
     const dw = r.width, dh = r.height;
-    if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
-    const pwPx = panel.w * dw, phPx = panel.h * dh;
+    if (dw === 0 || dh === 0) return 1;
     const vw = window.innerWidth, vh = window.innerHeight;
-    // Fit panel into ~92% of viewport
-    const s = Math.min(vw / pwPx, vh / phPx) * 0.92;
+    const panels = PAGES[pageIdx].panels;
+    if (!panels.length) return 1;
+    // For each panel, find the scale needed to fit it into ~94% of viewport.
+    // Use the MINIMUM across panels so every panel fits with the same scale.
+    let s = Infinity;
+    for (const p of panels) {
+      const fit = Math.min(vw / (p.w * dw), vh / (p.h * dh)) * 0.94;
+      s = Math.min(s, fit);
+    }
+    return Math.max(1, s);  // never zoom out below natural fit
+  }
+
+  function getPanelScale(pageIdx) {
+    if (pagePanelScale[pageIdx] == null) {
+      pagePanelScale[pageIdx] = computePagePanelScale(pageIdx);
+    }
+    return pagePanelScale[pageIdx];
+  }
+
+  function transformForStep(step) {
+    if (step.panelIdx === -1) {
+      // Full page = natural fit, no transform
+      return { tx: 0, ty: 0, s: 1 };
+    }
+    const panel = panelFor(step);
+    const s = getPanelScale(step.pageIdx);
+    const r = imgRect();
+    const dw = r.width, dh = r.height;
     const cx = (panel.x + panel.w / 2) * dw;
     const cy = (panel.y + panel.h / 2) * dh;
+    // Translate (in screen pixels) so panel center lands at viewport center.
     const tx = -(cx - dw / 2) * s;
     const ty = -(cy - dh / 2) * s;
     return { tx, ty, s };
   }
 
   function applyTransform(t, smooth) {
-    if (smooth) {
-      staticImg.style.transition = "";
-    } else {
-      staticImg.style.transition = "none";
-    }
-    staticImg.style.transform =
+    if (!smooth) book.style.transition = "none";
+    else book.style.transition = "";
+    book.style.transform =
       `translate3d(${t.tx}px, ${t.ty}px, 0) scale(${t.s})`;
     if (!smooth) {
-      // Force a reflow so the next "smooth" change actually transitions
       // eslint-disable-next-line no-unused-expressions
-      staticImg.offsetHeight;
-      staticImg.style.transition = "";
+      book.offsetHeight;
+      book.style.transition = "";
     }
   }
 
   function applyStepTransform(step, smooth) {
-    applyTransform(computeTransform(panelFor(step)), smooth);
+    applyTransform(transformForStep(step), smooth);
   }
 
   function gotoStep(newIdx) {
@@ -300,7 +323,8 @@ HTML_TEMPLATE = r"""<!doctype html>
     const newStep = STEPS[newIdx];
 
     if (oldStep.pageIdx === newStep.pageIdx) {
-      // Same page: smooth pan/zoom to new panel (or back to full)
+      // Same page: smooth transition. Panel-to-panel is translate-only at the
+      // same scale (camera pan); full<->panel involves a scale change too.
       stepIdx = newIdx;
       applyStepTransform(newStep, true);
       updateHud();
@@ -327,12 +351,11 @@ HTML_TEMPLATE = r"""<!doctype html>
       flipper.classList.remove("active", "flip-forward", "flip-backward");
       stepIdx = newIdx;
       animating = false;
-      // After landing on the new page (full view), if the target step is a panel,
-      // smoothly zoom into it so the guided flow continues.
+      // Recompute panel scale for the new page (image dims may differ)
+      pagePanelScale[newStep.pageIdx] = null;
+      // After landing on new page, if target step is a panel, smoothly camera-pan in
       if (newStep.panelIdx !== -1) {
-        // Wait one frame so the new image has laid out
         requestAnimationFrame(() => {
-          // Ensure the layout is settled before computing the transform
           requestAnimationFrame(() => applyStepTransform(newStep, true));
         });
       }
@@ -397,6 +420,8 @@ HTML_TEMPLATE = r"""<!doctype html>
   window.addEventListener("resize", () => {
     clearTimeout(resizeT);
     resizeT = setTimeout(() => {
+      // Invalidate all per-page cached scales (they depend on viewport size)
+      for (let i = 0; i < pagePanelScale.length; i++) pagePanelScale[i] = null;
       const step = STEPS[stepIdx];
       if (step.panelIdx !== -1) applyStepTransform(step, false);
     }, 120);
