@@ -144,16 +144,16 @@ HTML_TEMPLATE = r"""<!doctype html>
   .nav.prev { left: 12px; } .nav.next { right: 12px; }
 
   .topbar {
-    position: fixed; bottom: 12px; right: 12px;
+    position: fixed; top: 12px; left: 12px;
     display: flex; gap: 8px; z-index: 11;
   }
   .topbar button {
     background: rgba(255,255,255,0.10);
     border: 1px solid rgba(255,255,255,0.20);
     color: var(--fg);
-    padding: 7px 12px;
+    padding: 10px 18px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 14px;
     letter-spacing: 0.04em;
     cursor: pointer;
     backdrop-filter: blur(8px);
