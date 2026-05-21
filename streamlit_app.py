@@ -1,18 +1,17 @@
-"""Comic book reader with per-page guided view (ComiXology-style).
+"""Comic book flipbook embedded in a Streamlit app via st.components.v1.html.
 
-For each page:
-  1. Show the full page.
-  2. Smoothly zoom into each panel of that page in sequence.
-  3. Flip (3D animation) to the next page's full view, then walk its panels.
-  4. Repeat.
+Two viewing modes:
+- Page mode (default): full page fits to the viewport, with 3D page-turn animation.
+- Guided/Read mode: page scales to fill the screen width; each tap pans vertically
+  by ~80% of the viewport height, and advances to the next page when scrolled past
+  the bottom. Designed for comfortable reading on a phone.
 
-PNGs are inlined as base64 so the iframe is self-contained.
+Inlines the PNGs as base64 data URLs so the iframe is fully self-contained.
 """
 
 from __future__ import annotations
 
 import base64
-import json
 from pathlib import Path
 
 import streamlit as st
@@ -27,45 +26,6 @@ PAGES = [
     ("p.7.png", "p. 7"),
 ]
 
-# Panel rectangles per page, as fractions of the page (x, y, w, h in 0..1).
-# Order = reading order (the order panels are walked through during the guided view).
-PANELS = {
-    "p.2.png": [
-        # 4 horizontal stripe panels, full width
-        {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.20},  # Earth
-        {"x": 0.02, "y": 0.22, "w": 0.96, "h": 0.22},  # City skyline
-        {"x": 0.02, "y": 0.45, "w": 0.96, "h": 0.22},  # Street/people
-        {"x": 0.02, "y": 0.66, "w": 0.96, "h": 0.34},  # Blue cyber crowd
-    ],
-    "p.3-p4.png": [
-        # 2-page spread, walk left then right, top then bottom
-        {"x": 0.02, "y": 0.02, "w": 0.50, "h": 0.50},  # Top-left intro + photo cluster
-        {"x": 0.02, "y": 0.50, "w": 0.50, "h": 0.50},  # Bottom-left title block
-        {"x": 0.50, "y": 0.02, "w": 0.50, "h": 0.45},  # Top-right photos
-        {"x": 0.50, "y": 0.45, "w": 0.50, "h": 0.55},  # Data Guardians trio
-    ],
-    "p.5.png": [
-        # 2x2 grid of Data Heroes
-        {"x": 0.06, "y": 0.02, "w": 0.50, "h": 0.55},  # Datasci (top-left)
-        {"x": 0.45, "y": 0.02, "w": 0.55, "h": 0.55},  # Analysta (top-right)
-        {"x": 0.05, "y": 0.55, "w": 0.55, "h": 0.45},  # Appdev (bottom-left)
-        {"x": 0.40, "y": 0.55, "w": 0.60, "h": 0.45},  # Architecia (bottom-right)
-    ],
-    "p.6.png": [
-        # 3 panels: 2 hero portraits + bottom team scene
-        {"x": 0.05, "y": 0.02, "w": 0.55, "h": 0.55},  # The Engineer
-        {"x": 0.45, "y": 0.05, "w": 0.55, "h": 0.55},  # Administrator
-        {"x": 0.00, "y": 0.55, "w": 1.00, "h": 0.45},  # Full team scene
-    ],
-    "p.7.png": [
-        # 4 panels: villains + heroes + reveal
-        {"x": 0.00, "y": 0.00, "w": 1.00, "h": 0.45},  # Silo + intro
-        {"x": 0.40, "y": 0.20, "w": 0.60, "h": 0.50},  # Torrent
-        {"x": 0.00, "y": 0.40, "w": 0.65, "h": 0.50},  # Dr. Legacy + Data Heroes
-        {"x": 0.50, "y": 0.65, "w": 0.50, "h": 0.35},  # Bottom-right villain reveal
-    ],
-}
-
 ASSET_DIR = Path(__file__).parent
 
 
@@ -79,19 +39,10 @@ def encode_page(filename: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def build_html() -> str:
-    pages_js_items = []
-    for fn, lbl in PAGES:
-        b64 = encode_page(fn)
-        panels = PANELS.get(fn, [])
-        pages_js_items.append(
-            "{ "
-            f'src: "data:image/png;base64,{b64}", '
-            f'label: {json.dumps(lbl)}, '
-            f'file: {json.dumps(fn)}, '
-            f"panels: {json.dumps(panels)} "
-            "}"
-        )
-    pages_js = ",\n    ".join(pages_js_items)
+    pages_js = ",\n    ".join(
+        f'{{ src: "data:image/png;base64,{encode_page(fn)}", label: "{lbl}" }}'
+        for fn, lbl in PAGES
+    )
     return HTML_TEMPLATE.replace("__PAGES__", pages_js)
 
 
@@ -104,7 +55,6 @@ HTML_TEMPLATE = r"""<!doctype html>
   :root {
     --fg: #eee;
     --shadow: 0 18px 50px rgba(0,0,0,0.65);
-    --ease: cubic-bezier(.4,.0,.2,1);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -116,49 +66,28 @@ HTML_TEMPLATE = r"""<!doctype html>
     -webkit-touch-callout: none;
   }
 
-  /* Viewport clips the page so only what's "in frame" is visible.
-     This is what creates the illusion of a camera panning over a fixed comic. */
+  /* === Page mode (full page fits) === */
   .stage {
     position: fixed; inset: 0;
-    overflow: hidden;
     display: flex; align-items: center; justify-content: center;
     perspective: 2200px;
   }
-  .book {
-    position: relative;
-    display: inline-block;
-    line-height: 0;
-    transform-style: preserve-3d;
-    transform-origin: center center;
-    transition: transform 750ms var(--ease);
-    will-change: transform;
-  }
+  .book { position: relative; display: inline-block; line-height: 0; transform-style: preserve-3d; }
   .static-page {
     display: block;
-    max-width: calc(100vw - 60px);
-    max-height: calc(100vh - 60px);
-    border-radius: 4px;
-    background: #000;
-    box-shadow: var(--shadow);
+    max-width: calc(100vw - 80px);
+    max-height: calc(100vh - 70px);
+    border-radius: 4px; box-shadow: var(--shadow); background: #000;
   }
-
-  /* Flipper covers the natural-size .book area */
   .flipper {
     position: absolute; inset: 0;
-    transform-style: preserve-3d;
-    transform-origin: left center;
-    pointer-events: none;
-    visibility: hidden;
-    will-change: transform;
-    z-index: 5;
+    transform-style: preserve-3d; transform-origin: left center;
+    pointer-events: none; visibility: hidden; will-change: transform;
   }
   .flipper.active { visibility: visible; }
   .face {
     position: absolute; inset: 0;
-    backface-visibility: hidden;
-    border-radius: 4px;
-    overflow: hidden;
-    background: #000;
+    backface-visibility: hidden; border-radius: 4px; overflow: hidden; background: #000;
   }
   .face img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .face.front { box-shadow: var(--shadow); }
@@ -176,8 +105,29 @@ HTML_TEMPLATE = r"""<!doctype html>
   .flipper.active .face::after { opacity: 1; }
   @keyframes flipForward  { from { transform: rotateY(0deg); }   to { transform: rotateY(-180deg); } }
   @keyframes flipBackward { from { transform: rotateY(-180deg); } to { transform: rotateY(0deg); } }
-  .flipper.flip-forward  { animation: flipForward  900ms var(--ease) forwards; }
-  .flipper.flip-backward { animation: flipBackward 900ms var(--ease) forwards; }
+  .flipper.flip-forward  { animation: flipForward  950ms cubic-bezier(.36,.07,.2,.99) forwards; }
+  .flipper.flip-backward { animation: flipBackward 950ms cubic-bezier(.36,.07,.2,.99) forwards; }
+
+  /* === Guided mode (pan vertically) === */
+  .reader {
+    position: fixed; inset: 0;
+    overflow: hidden;
+    background: #000;
+    display: none;
+  }
+  body.read-mode .reader { display: block; }
+  body.read-mode .stage  { display: none; }
+  .reader-track {
+    position: absolute; left: 0; top: 0;
+    width: 100%;
+    transition: transform 600ms cubic-bezier(.4, .0, .2, 1);
+    will-change: transform;
+  }
+  .reader-track img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
 
   /* === UI buttons === */
   .nav {
@@ -187,21 +137,39 @@ HTML_TEMPLATE = r"""<!doctype html>
     border: 1px solid rgba(255,255,255,0.15);
     display: flex; align-items: center; justify-content: center;
     font-size: 20px; cursor: pointer; backdrop-filter: blur(8px);
-    transition: background 200ms, transform 200ms; z-index: 20;
+    transition: background 200ms, transform 200ms; z-index: 10;
   }
   .nav:hover { background: rgba(255,255,255,0.18); transform: translateY(-50%) scale(1.05); }
   .nav:disabled { opacity: 0.3; cursor: not-allowed; }
   .nav.prev { left: 12px; } .nav.next { right: 12px; }
 
+  .topbar {
+    position: fixed; top: 12px; right: 12px;
+    display: flex; gap: 8px; z-index: 11;
+  }
+  .topbar button {
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.20);
+    color: var(--fg);
+    padding: 7px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+  }
+  .topbar button:hover { background: rgba(255,255,255,0.20); }
+
   .hud {
     position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.55); padding: 6px 14px; border-radius: 999px;
     font-size: 12px; letter-spacing: 0.05em;
-    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); z-index: 20;
+    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); z-index: 10;
   }
 </style>
 </head>
 <body>
+  <!-- Page mode -->
   <div class="stage" id="stage">
     <div class="book" id="book">
       <img id="static-img" class="static-page" src="" alt="" draggable="false"/>
@@ -212,8 +180,19 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
   </div>
 
-  <button class="nav prev" id="prev" aria-label="Previous">&#8249;</button>
-  <button class="nav next" id="next" aria-label="Next">&#8250;</button>
+  <!-- Guided mode -->
+  <div class="reader" id="reader">
+    <div class="reader-track" id="reader-track">
+      <img id="reader-img" src="" alt="" draggable="false"/>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <button class="nav prev" id="prev">&#8249;</button>
+  <button class="nav next" id="next">&#8250;</button>
+  <div class="topbar">
+    <button id="toggle">Read mode</button>
+  </div>
   <div class="hud" id="hud"></div>
 
 <script>
@@ -221,191 +200,200 @@ HTML_TEMPLATE = r"""<!doctype html>
     __PAGES__
   ];
 
-  // Build the linear list of "steps" the user walks through.
-  // Each step = { pageIdx, panelIdx } where panelIdx === -1 means full page.
-  const STEPS = [];
-  PAGES.forEach((p, pageIdx) => {
-    STEPS.push({ pageIdx, panelIdx: -1 });
-    p.panels.forEach((_, panelIdx) => {
-      STEPS.push({ pageIdx, panelIdx });
-    });
-  });
+  const stage      = document.getElementById("stage");
+  const reader     = document.getElementById("reader");
+  const readerImg  = document.getElementById("reader-img");
+  const readerTrack= document.getElementById("reader-track");
+  const staticImg  = document.getElementById("static-img");
+  const frontImg   = document.getElementById("front-img");
+  const flipper    = document.getElementById("flipper");
+  const hud        = document.getElementById("hud");
+  const prev       = document.getElementById("prev");
+  const next       = document.getElementById("next");
+  const toggle     = document.getElementById("toggle");
 
-  const stage     = document.getElementById("stage");
-  const book      = document.getElementById("book");
-  const staticImg = document.getElementById("static-img");
-  const frontImg  = document.getElementById("front-img");
-  const flipper   = document.getElementById("flipper");
-  const hud       = document.getElementById("hud");
-  const prevBtn   = document.getElementById("prev");
-  const nextBtn   = document.getElementById("next");
-
-  let stepIdx = 0;
+  let current = 0;
   let animating = false;
+
+  // How many pages to show in page-flip mode before auto-switching to Read mode.
+  // Set to 0 to start in Read mode immediately; set to PAGES.length to never auto-switch.
+  const PAGE_VIEW_LIMIT = 2;
+
+  // === Page mode ===
 
   const src = (i) => PAGES[i].src;
   function setStatic(idx) { staticImg.src = src(idx); }
 
-  function panelFor(step) {
-    if (step.panelIdx === -1) return null;
-    return PAGES[step.pageIdx].panels[step.panelIdx] || null;
-  }
-
-  function imgRect() { return staticImg.getBoundingClientRect(); }
-
-  function transformForStep(step) {
-    if (step.panelIdx === -1) {
-      // Full page = natural fit, no transform
-      return { tx: 0, ty: 0, s: 1 };
-    }
-    const panel = panelFor(step);
-    const r = imgRect();
-    const dw = r.width, dh = r.height;
-    if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
-    const vw = window.innerWidth, vh = window.innerHeight;
-    // Per-panel scale: fit each panel to ~92% of viewport
-    const s = Math.min(vw / (panel.w * dw), vh / (panel.h * dh)) * 0.92;
-    const cx = (panel.x + panel.w / 2) * dw;
-    const cy = (panel.y + panel.h / 2) * dh;
-    // Translate so panel center lands at viewport center
-    const tx = -(cx - dw / 2) * s;
-    const ty = -(cy - dh / 2) * s;
-    return { tx, ty, s };
-  }
-
-  function applyTransform(t, smooth) {
-    if (!smooth) book.style.transition = "none";
-    else book.style.transition = "";
-    book.style.transform =
-      `translate3d(${t.tx}px, ${t.ty}px, 0) scale(${t.s})`;
-    if (!smooth) {
-      // eslint-disable-next-line no-unused-expressions
-      book.offsetHeight;
-      book.style.transition = "";
-    }
-  }
-
-  function applyStepTransform(step, smooth) {
-    applyTransform(transformForStep(step), smooth);
-  }
-
-  function gotoStep(newIdx) {
+  function flipTo(idx) {
     if (animating) return;
-    if (newIdx < 0 || newIdx >= STEPS.length) return;
-    if (newIdx === stepIdx) return;
-    const oldStep = STEPS[stepIdx];
-    const newStep = STEPS[newIdx];
-
-    if (oldStep.pageIdx === newStep.pageIdx) {
-      // Same page: smooth transition. Panel-to-panel is translate-only at the
-      // same scale (camera pan); full<->panel involves a scale change too.
-      stepIdx = newIdx;
-      applyStepTransform(newStep, true);
-      updateHud();
-      return;
-    }
-
-    // Page change. Make the motion continuous so the user never sees an
-    // unintended "full page" flash:
-    //   forward (panel of N -> full of N+1):
-    //     smooth zoom-out to full N -> flip -> land on full N+1
-    //   backward (full of N+1 -> last panel of N):
-    //     flip -> land on full N -> smooth zoom into last panel of N
+    if (idx < 0 || idx >= PAGES.length || idx === current) return;
     animating = true;
-    const forward = newStep.pageIdx > oldStep.pageIdx;
-    const wasZoomedIn = oldStep.panelIdx !== -1;
+    const forward = idx > current;
+    const targetIdx = idx;
 
-    const startFlip = () => {
-      if (forward) {
-        frontImg.src = src(oldStep.pageIdx);
-        setStatic(newStep.pageIdx);
-        flipper.classList.add("active", "flip-forward");
-      } else {
-        frontImg.src = src(newStep.pageIdx);
-        flipper.classList.add("active", "flip-backward");
-      }
-      const onFlipEnd = () => {
-        flipper.removeEventListener("animationend", onFlipEnd);
-        if (!forward) setStatic(newStep.pageIdx);
-        flipper.classList.remove("active", "flip-forward", "flip-backward");
-        stepIdx = newIdx;
-        if (newStep.panelIdx !== -1) {
-          // Smoothly camera-pan into the target panel after landing
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              applyStepTransform(newStep, true);
-              const onZoomEnd = () => {
-                book.removeEventListener("transitionend", onZoomEnd);
-                animating = false;
-              };
-              book.addEventListener("transitionend", onZoomEnd, { once: true });
-              // Safety: in case transitionend doesn't fire
-              setTimeout(() => { animating = false; }, 900);
-            });
-          });
-        } else {
-          animating = false;
-        }
-        updateHud();
-      };
-      flipper.addEventListener("animationend", onFlipEnd);
-    };
-
-    if (wasZoomedIn) {
-      // Smooth zoom-out to full of the current page, then flip
-      applyTransform({ tx: 0, ty: 0, s: 1 }, true);
-      const onZoomOutEnd = () => {
-        book.removeEventListener("transitionend", onZoomOutEnd);
-        startFlip();
-      };
-      book.addEventListener("transitionend", onZoomOutEnd, { once: true });
-      // Safety in case transitionend doesn't fire
-      setTimeout(() => {
-        book.removeEventListener("transitionend", onZoomOutEnd);
-        if (!flipper.classList.contains("active")) startFlip();
-      }, 850);
+    if (forward) {
+      frontImg.src = src(current);
+      setStatic(targetIdx);
+      flipper.classList.add("active", "flip-forward");
     } else {
-      // Already at full page of N+1 (only happens going backward across a boundary)
-      startFlip();
+      frontImg.src = src(targetIdx);
+      flipper.classList.add("active", "flip-backward");
+    }
+    const onEnd = () => {
+      flipper.removeEventListener("animationend", onEnd);
+      if (!forward) setStatic(targetIdx);
+      flipper.classList.remove("active", "flip-forward", "flip-backward");
+      current = targetIdx;
+      animating = false;
+      // Auto-switch to Read mode once we cross the page-view boundary
+      if (current >= PAGE_VIEW_LIMIT) {
+        setReadMode(true);
+      }
+      updateHud();
+    };
+    flipper.addEventListener("animationend", onEnd);
+  }
+
+  // === Guided mode ===
+
+  const STEP_FRACTION = 0.78;  // pan by 78% of viewport per tap
+  let scrollY = 0;
+
+  function loadReaderPage(idx, fromBottom = false) {
+    readerImg.src = src(idx);
+    // Wait for image to load so we know its rendered height
+    readerImg.onload = () => {
+      const ih = readerImg.getBoundingClientRect().height;
+      const vh = window.innerHeight;
+      scrollY = fromBottom ? Math.max(0, ih - vh) : 0;
+      // No animation on initial position
+      readerTrack.style.transition = "none";
+      applyScroll();
+      // Re-enable animation on the next frame
+      requestAnimationFrame(() => {
+        readerTrack.style.transition = "";
+      });
+    };
+  }
+
+  function applyScroll() {
+    readerTrack.style.transform = `translate3d(0, ${-scrollY}px, 0)`;
+  }
+
+  function readerStep(direction) {
+    if (animating) return;
+    const ih = readerImg.getBoundingClientRect().height;
+    const vh = window.innerHeight;
+    const maxY = Math.max(0, ih - vh);
+    const step = vh * STEP_FRACTION;
+
+    if (direction > 0) {
+      if (scrollY >= maxY - 1) {
+        // At bottom — advance page
+        if (current < PAGES.length - 1) {
+          animating = true;
+          current += 1;
+          loadReaderPage(current, false);
+          // Briefly flag; the onload resets state
+          setTimeout(() => { animating = false; updateHud(); }, 50);
+        }
+      } else {
+        scrollY = Math.min(maxY, scrollY + step);
+        applyScroll();
+      }
+    } else {
+      if (scrollY <= 1) {
+        if (current > 0) {
+          const targetIdx = current - 1;
+          // If the previous page is in the page-view range, hand off to page mode
+          if (targetIdx < PAGE_VIEW_LIMIT) {
+            // Exit read mode displaying current page first, then flip backward to target
+            setReadMode(false);
+            // setReadMode(false) calls setStatic(current); now flip from current to target
+            flipTo(targetIdx);
+          } else {
+            animating = true;
+            current = targetIdx;
+            loadReaderPage(current, true);
+            setTimeout(() => { animating = false; updateHud(); }, 50);
+          }
+        }
+      } else {
+        scrollY = Math.max(0, scrollY - step);
+        applyScroll();
+      }
     }
   }
 
-  function goPrev() { gotoStep(stepIdx - 1); }
-  function goNext() { gotoStep(stepIdx + 1); }
+  // === Mode toggle ===
 
-  // === HUD ===
-  function updateHud() {
-    const step = STEPS[stepIdx];
-    const page = PAGES[step.pageIdx];
-    const panelInfo = step.panelIdx === -1
-      ? "full page"
-      : `panel ${step.panelIdx + 1} / ${page.panels.length}`;
-    hud.textContent = `${page.label}  ·  ${panelInfo}  ·  ${step.pageIdx + 1} / ${PAGES.length}`;
-    prevBtn.disabled = stepIdx === 0;
-    nextBtn.disabled = stepIdx === STEPS.length - 1;
+  function isReadMode() { return document.body.classList.contains("read-mode"); }
+
+  function setReadMode(on) {
+    if (on) {
+      document.body.classList.add("read-mode");
+      toggle.textContent = "Page view";
+      loadReaderPage(current, false);
+    } else {
+      document.body.classList.remove("read-mode");
+      toggle.textContent = "Read mode";
+      setStatic(current);
+    }
+    updateHud();
   }
 
-  // === Input ===
-  prevBtn.addEventListener("click", (e) => { e.stopPropagation(); goPrev(); });
-  nextBtn.addEventListener("click", (e) => { e.stopPropagation(); goNext(); });
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setReadMode(!isReadMode());
+  });
+
+  // Auto-enter read mode on small (mobile) viewports, unless the user wants
+  // to see the first few pages with the page-flip animation first.
+  if (PAGE_VIEW_LIMIT === 0 || (window.innerWidth <= 700 && PAGE_VIEW_LIMIT === 0)) {
+    setReadMode(true);
+  }
+
+  // === Hud ===
+
+  function updateHud() {
+    hud.textContent = `${PAGES[current].label}  ·  ${current + 1} / ${PAGES.length}`;
+    if (isReadMode()) {
+      prev.disabled = (current === 0 && scrollY <= 1);
+      next.disabled = false;  // next can advance both pan and page
+    } else {
+      prev.disabled = current === 0;
+      next.disabled = current === PAGES.length - 1;
+    }
+  }
+
+  // === Navigation ===
+
+  function goPrev() { isReadMode() ? readerStep(-1) : flipTo(current - 1); updateHud(); }
+  function goNext() { isReadMode() ? readerStep(+1) : flipTo(current + 1); updateHud(); }
+
+  prev.addEventListener("click", (e) => { e.stopPropagation(); goPrev(); });
+  next.addEventListener("click", (e) => { e.stopPropagation(); goNext(); });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowLeft" || e.key === "PageUp") {
-      e.preventDefault(); goPrev();
-    } else if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
+    if (e.key === "ArrowLeft" || e.key === "PageUp") goPrev();
+    else if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
       e.preventDefault(); goNext();
+    } else if (e.key === "Escape" && isReadMode()) {
+      setReadMode(false);
     }
   });
 
-  // Tap to navigate (left half = prev, right half = next)
+  // Tap to navigate
   function onTap(e) {
-    if (e.target.closest(".nav")) return;
-    const x = e.clientX;
-    if (x < window.innerWidth / 2) goPrev(); else goNext();
+    if (e.target.closest(".nav") || e.target.closest(".topbar")) return;
+    const rect = (isReadMode() ? reader : stage).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x < rect.width / 2) goPrev(); else goNext();
   }
   stage.addEventListener("click", onTap);
+  reader.addEventListener("click", onTap);
 
-  // Touch swipe
+  // Touch swipe in page mode
   let touchX = null, touchY = null;
   document.addEventListener("touchstart", (e) => {
     touchX = e.touches[0].clientX;
@@ -415,33 +403,27 @@ HTML_TEMPLATE = r"""<!doctype html>
     if (touchX === null) return;
     const dx = e.changedTouches[0].clientX - touchX;
     const dy = e.changedTouches[0].clientY - touchY;
-    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-      if (dx < 0) goNext(); else goPrev();
+    if (isReadMode()) {
+      // Vertical swipe pans the reader
+      if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx)) {
+        readerStep(dy < 0 ? +1 : -1);
+        updateHud();
+      } else if (Math.abs(dx) > 50) {
+        // Horizontal swipe also navigates
+        readerStep(dx < 0 ? +1 : -1);
+        updateHud();
+      }
+    } else {
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+        flipTo(current + (dx < 0 ? 1 : -1));
+      }
     }
     touchX = touchY = null;
   }, { passive: true });
 
-  // Recompute current transform on resize so the panel zoom stays correct
-  let resizeT;
-  window.addEventListener("resize", () => {
-    clearTimeout(resizeT);
-    resizeT = setTimeout(() => {
-      const step = STEPS[stepIdx];
-      if (step.panelIdx !== -1) applyStepTransform(step, false);
-    }, 120);
-  });
-
   // === Init ===
-  function init() {
-    setStatic(0);
-    // Wait for the first image to load so transforms compute correctly
-    if (staticImg.complete) {
-      updateHud();
-    } else {
-      staticImg.addEventListener("load", updateHud, { once: true });
-    }
-  }
-  init();
+  setStatic(current);
+  updateHud();
 </script>
 </body>
 </html>
