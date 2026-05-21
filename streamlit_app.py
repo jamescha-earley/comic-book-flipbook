@@ -12,6 +12,7 @@ Inlines the PNGs as base64 data URLs so the iframe is fully self-contained.
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -26,6 +27,41 @@ PAGES = [
     ("p.7.png", "p. 7"),
 ]
 
+# Read-mode stops per page. Each stop is a rectangle on the page in fractions
+# (x, y, w, h in 0..1). The reader walks these one tap at a time.
+STOPS = {
+    # p.2: 4 horizontal stripes (Earth / skyline / street / cyber crowd)
+    "p.2.png": [
+        {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.21},
+        {"x": 0.02, "y": 0.23, "w": 0.96, "h": 0.22},
+        {"x": 0.02, "y": 0.45, "w": 0.96, "h": 0.22},
+        {"x": 0.02, "y": 0.66, "w": 0.96, "h": 0.34},
+    ],
+    # p.3-p4: wide spread split into 4 quadrants
+    "p.3-p4.png": [
+        {"x": 0.00, "y": 0.00, "w": 0.50, "h": 0.50},  # top-left
+        {"x": 0.50, "y": 0.00, "w": 0.50, "h": 0.50},  # top-right
+        {"x": 0.00, "y": 0.50, "w": 0.50, "h": 0.50},  # bottom-left
+        {"x": 0.50, "y": 0.50, "w": 0.50, "h": 0.50},  # bottom-right
+    ],
+    # p.5, p.6, p.7: split into thirds vertically (full width)
+    "p.5.png": [
+        {"x": 0.00, "y": 0.00, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.33, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.66, "w": 1.00, "h": 0.34},
+    ],
+    "p.6.png": [
+        {"x": 0.00, "y": 0.00, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.33, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.66, "w": 1.00, "h": 0.34},
+    ],
+    "p.7.png": [
+        {"x": 0.00, "y": 0.00, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.33, "w": 1.00, "h": 0.34},
+        {"x": 0.00, "y": 0.66, "w": 1.00, "h": 0.34},
+    ],
+}
+
 ASSET_DIR = Path(__file__).parent
 
 
@@ -39,10 +75,18 @@ def encode_page(filename: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def build_html() -> str:
-    pages_js = ",\n    ".join(
-        f'{{ src: "data:image/png;base64,{encode_page(fn)}", label: "{lbl}" }}'
-        for fn, lbl in PAGES
-    )
+    items = []
+    for fn, lbl in PAGES:
+        b64 = encode_page(fn)
+        stops = STOPS.get(fn, [])
+        items.append(
+            "{ "
+            f'src: "data:image/png;base64,{b64}", '
+            f'label: {json.dumps(lbl)}, '
+            f"stops: {json.dumps(stops)} "
+            "}"
+        )
+    pages_js = ",\n    ".join(items)
     return HTML_TEMPLATE.replace("__PAGES__", pages_js)
 
 
@@ -108,25 +152,24 @@ HTML_TEMPLATE = r"""<!doctype html>
   .flipper.flip-forward  { animation: flipForward  950ms cubic-bezier(.36,.07,.2,.99) forwards; }
   .flipper.flip-backward { animation: flipBackward 950ms cubic-bezier(.36,.07,.2,.99) forwards; }
 
-  /* === Guided mode (pan vertically) === */
+  /* === Guided/Read mode: walks predefined stops via scale+translate === */
   .reader {
     position: fixed; inset: 0;
     overflow: hidden;
     background: #000;
     display: none;
+    align-items: center;
+    justify-content: center;
   }
-  body.read-mode .reader { display: block; }
+  body.read-mode .reader { display: flex; }
   body.read-mode .stage  { display: none; }
-  .reader-track {
-    position: absolute; left: 0; top: 0;
-    width: 100%;
-    transition: transform 600ms cubic-bezier(.4, .0, .2, 1);
-    will-change: transform;
-  }
-  .reader-track img {
+  .reader-img {
     display: block;
-    width: 100%;
-    height: auto;
+    max-width: 100vw;
+    max-height: 100vh;
+    transform-origin: center center;
+    transition: transform 650ms cubic-bezier(.4, .0, .2, 1);
+    will-change: transform;
   }
 
   /* === UI buttons === */
@@ -180,11 +223,9 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
   </div>
 
-  <!-- Guided mode -->
+  <!-- Guided / Read mode -->
   <div class="reader" id="reader">
-    <div class="reader-track" id="reader-track">
-      <img id="reader-img" src="" alt="" draggable="false"/>
-    </div>
+    <img id="reader-img" class="reader-img" src="" alt="" draggable="false"/>
   </div>
 
   <!-- Controls -->
@@ -203,7 +244,6 @@ HTML_TEMPLATE = r"""<!doctype html>
   const stage      = document.getElementById("stage");
   const reader     = document.getElementById("reader");
   const readerImg  = document.getElementById("reader-img");
-  const readerTrack= document.getElementById("reader-track");
   const staticImg  = document.getElementById("static-img");
   const frontImg   = document.getElementById("front-img");
   const flipper    = document.getElementById("flipper");
@@ -212,17 +252,18 @@ HTML_TEMPLATE = r"""<!doctype html>
   const next       = document.getElementById("next");
   const toggle     = document.getElementById("toggle");
 
-  let current = 0;
+  let current = 0;     // page index
+  let stopIdx = 0;     // stop index within current page
   let animating = false;
 
-  // How many pages to show in page-flip mode before auto-switching to Read mode.
-  // Set to 0 to start in Read mode immediately; set to PAGES.length to never auto-switch.
-  const PAGE_VIEW_LIMIT = 2;
+  // 0 = always start in Read mode; PAGES.length = always Page mode.
+  const PAGE_VIEW_LIMIT = 0;
 
   // === Page mode ===
 
   const src = (i) => PAGES[i].src;
   function setStatic(idx) { staticImg.src = src(idx); }
+  function stopsFor(idx) { return PAGES[idx].stops || []; }
 
   function flipTo(idx) {
     if (animating) return;
@@ -245,7 +286,6 @@ HTML_TEMPLATE = r"""<!doctype html>
       flipper.classList.remove("active", "flip-forward", "flip-backward");
       current = targetIdx;
       animating = false;
-      // Auto-switch to Read mode once we cross the page-view boundary
       if (current >= PAGE_VIEW_LIMIT) {
         setReadMode(true);
       }
@@ -254,79 +294,78 @@ HTML_TEMPLATE = r"""<!doctype html>
     flipper.addEventListener("animationend", onEnd);
   }
 
-  // === Guided mode ===
+  // === Read mode (stops) ===
 
-  const STEP_FRACTION = 0.78;  // pan by 78% of viewport per tap
-  let scrollY = 0;
-
-  function loadReaderPage(idx, fromBottom = false) {
-    readerImg.src = src(idx);
-    // Wait for image to load so we know its rendered height
-    readerImg.onload = () => {
-      const ih = readerImg.getBoundingClientRect().height;
-      const vh = window.innerHeight;
-      scrollY = fromBottom ? Math.max(0, ih - vh) : 0;
-      // No animation on initial position
-      readerTrack.style.transition = "none";
-      applyScroll();
-      // Re-enable animation on the next frame
-      requestAnimationFrame(() => {
-        readerTrack.style.transition = "";
-      });
-    };
+  function computeStopTransform(stop) {
+    const r = readerImg.getBoundingClientRect();
+    const dw = r.width, dh = r.height;
+    if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
+    const vw = window.innerWidth, vh = window.innerHeight;
+    // Fit stop into ~95% of viewport
+    const s = Math.min(vw / (stop.w * dw), vh / (stop.h * dh)) * 0.95;
+    const cx = (stop.x + stop.w / 2) * dw;
+    const cy = (stop.y + stop.h / 2) * dh;
+    const tx = -(cx - dw / 2) * s;
+    const ty = -(cy - dh / 2) * s;
+    return { tx, ty, s };
   }
 
-  function applyScroll() {
-    readerTrack.style.transform = `translate3d(0, ${-scrollY}px, 0)`;
+  function applyStop(smooth) {
+    const stops = stopsFor(current);
+    if (!stops.length) return;
+    const t = computeStopTransform(stops[stopIdx]);
+    if (!smooth) readerImg.style.transition = "none";
+    else readerImg.style.transition = "";
+    readerImg.style.transform =
+      `translate3d(${t.tx}px, ${t.ty}px, 0) scale(${t.s})`;
+    if (!smooth) {
+      // eslint-disable-next-line no-unused-expressions
+      readerImg.offsetHeight;
+      readerImg.style.transition = "";
+    }
+  }
+
+  function loadReaderPage(idx, lastStop = false) {
+    current = idx;
+    readerImg.src = src(idx);
+    const finishLoad = () => {
+      stopIdx = lastStop ? Math.max(0, stopsFor(idx).length - 1) : 0;
+      applyStop(false);
+      updateHud();
+    };
+    if (readerImg.complete && readerImg.naturalWidth) finishLoad();
+    else readerImg.onload = finishLoad;
   }
 
   function readerStep(direction) {
     if (animating) return;
-    const ih = readerImg.getBoundingClientRect().height;
-    const vh = window.innerHeight;
-    const maxY = Math.max(0, ih - vh);
-    const step = vh * STEP_FRACTION;
-
+    const stops = stopsFor(current);
     if (direction > 0) {
-      // Forward: if already at (or about to reach) the bottom, advance to next page.
-      if (scrollY + step >= maxY - 1) {
-        if (current < PAGES.length - 1) {
-          animating = true;
-          current += 1;
-          loadReaderPage(current, false);
-          setTimeout(() => { animating = false; updateHud(); }, 50);
-        } else {
-          // Last page: just snap to the very bottom.
-          scrollY = maxY;
-          applyScroll();
-        }
-      } else {
-        scrollY = Math.min(maxY, scrollY + step);
-        applyScroll();
+      if (stopIdx < stops.length - 1) {
+        stopIdx += 1;
+        applyStop(true);
+        updateHud();
+      } else if (current < PAGES.length - 1) {
+        animating = true;
+        loadReaderPage(current + 1, false);
+        setTimeout(() => { animating = false; updateHud(); }, 60);
       }
     } else {
-      // Backward: if already at (or about to reach) the top, go to prev page.
-      if (scrollY - step <= 1) {
-        if (current > 0) {
-          const targetIdx = current - 1;
-          if (targetIdx < PAGE_VIEW_LIMIT) {
-            // Hand off to page mode and flip back
-            setReadMode(false);
-            flipTo(targetIdx);
-          } else {
-            animating = true;
-            current = targetIdx;
-            loadReaderPage(current, true);
-            setTimeout(() => { animating = false; updateHud(); }, 50);
-          }
+      if (stopIdx > 0) {
+        stopIdx -= 1;
+        applyStop(true);
+        updateHud();
+      } else if (current > 0) {
+        const targetIdx = current - 1;
+        if (targetIdx < PAGE_VIEW_LIMIT) {
+          // Hand off to page mode and flip back
+          setReadMode(false);
+          flipTo(targetIdx);
         } else {
-          // First page: snap to top.
-          scrollY = 0;
-          applyScroll();
+          animating = true;
+          loadReaderPage(targetIdx, true);
+          setTimeout(() => { animating = false; updateHud(); }, 60);
         }
-      } else {
-        scrollY = Math.max(0, scrollY - step);
-        applyScroll();
       }
     }
   }
@@ -353,19 +392,19 @@ HTML_TEMPLATE = r"""<!doctype html>
     setReadMode(!isReadMode());
   });
 
-  // Auto-enter read mode on small (mobile) viewports, unless the user wants
-  // to see the first few pages with the page-flip animation first.
-  if (PAGE_VIEW_LIMIT === 0 || (window.innerWidth <= 700 && PAGE_VIEW_LIMIT === 0)) {
-    setReadMode(true);
-  }
-
-  // === Hud ===
-
+  // === HUD ===
   function updateHud() {
-    hud.textContent = `${PAGES[current].label}  ·  ${current + 1} / ${PAGES.length}`;
+    const stops = stopsFor(current);
+    const stopInfo = stops.length
+      ? `${stopIdx + 1} / ${stops.length}`
+      : "";
+    const pageInfo = `${PAGES[current].label}  \u00b7  ${current + 1} / ${PAGES.length}`;
+    hud.textContent = stopInfo
+      ? `${pageInfo}  \u00b7  panel ${stopInfo}`
+      : pageInfo;
     if (isReadMode()) {
-      prev.disabled = (current === 0 && scrollY <= 1);
-      next.disabled = false;  // next can advance both pan and page
+      prev.disabled = (current === 0 && stopIdx === 0);
+      next.disabled = (current === PAGES.length - 1 && stopIdx >= stops.length - 1);
     } else {
       prev.disabled = current === 0;
       next.disabled = current === PAGES.length - 1;
@@ -374,8 +413,8 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   // === Navigation ===
 
-  function goPrev() { isReadMode() ? readerStep(-1) : flipTo(current - 1); updateHud(); }
-  function goNext() { isReadMode() ? readerStep(+1) : flipTo(current + 1); updateHud(); }
+  function goPrev() { isReadMode() ? readerStep(-1) : flipTo(current - 1); }
+  function goNext() { isReadMode() ? readerStep(+1) : flipTo(current + 1); }
 
   prev.addEventListener("click", (e) => { e.stopPropagation(); goPrev(); });
   next.addEventListener("click", (e) => { e.stopPropagation(); goNext(); });
@@ -389,17 +428,16 @@ HTML_TEMPLATE = r"""<!doctype html>
     }
   });
 
-  // Tap to navigate
+  // Tap to navigate (left half = prev, right half = next)
   function onTap(e) {
     if (e.target.closest(".nav") || e.target.closest(".topbar")) return;
-    const rect = (isReadMode() ? reader : stage).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    if (x < rect.width / 2) goPrev(); else goNext();
+    const x = e.clientX;
+    if (x < window.innerWidth / 2) goPrev(); else goNext();
   }
   stage.addEventListener("click", onTap);
   reader.addEventListener("click", onTap);
 
-  // Touch swipe in page mode
+  // Touch swipe
   let touchX = null, touchY = null;
   document.addEventListener("touchstart", (e) => {
     touchX = e.touches[0].clientX;
@@ -409,27 +447,31 @@ HTML_TEMPLATE = r"""<!doctype html>
     if (touchX === null) return;
     const dx = e.changedTouches[0].clientX - touchX;
     const dy = e.changedTouches[0].clientY - touchY;
-    if (isReadMode()) {
-      // Vertical swipe pans the reader
-      if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx)) {
-        readerStep(dy < 0 ? +1 : -1);
-        updateHud();
-      } else if (Math.abs(dx) > 50) {
-        // Horizontal swipe also navigates
-        readerStep(dx < 0 ? +1 : -1);
-        updateHud();
-      }
-    } else {
-      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-        flipTo(current + (dx < 0 ? 1 : -1));
-      }
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx < 0) goNext(); else goPrev();
+    } else if (isReadMode() && Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx)) {
+      // Vertical swipe also walks stops in Read mode
+      readerStep(dy < 0 ? +1 : -1);
     }
     touchX = touchY = null;
   }, { passive: true });
 
+  // Recompute current stop transform on resize
+  let resizeT;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => {
+      if (isReadMode()) applyStop(false);
+    }, 120);
+  });
+
   // === Init ===
-  setStatic(current);
-  updateHud();
+  if (PAGE_VIEW_LIMIT === 0) {
+    setReadMode(true);
+  } else {
+    setStatic(current);
+    updateHud();
+  }
 </script>
 </body>
 </html>
