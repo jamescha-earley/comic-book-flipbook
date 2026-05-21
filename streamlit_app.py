@@ -371,14 +371,17 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 0; padding-bottom: 0; max-width: 100%; }
-      header[data-testid="stHeader"] { background: transparent; }
+      .stApp { height: 100vh !important; overflow: hidden !important; }
+      .block-container { padding: 0 !important; max-width: 100% !important; height: 100vh !important; }
+      header[data-testid="stHeader"] { display: none !important; }
+      [data-testid="stToolbar"] { display: none !important; }
       footer { display: none; }
       #MainMenu { visibility: hidden; }
-      iframe { border: none !important; }
+      iframe { border: none !important; width: 100% !important; height: 100vh !important; display: block; }
+      .stApp > div:first-child { height: 100vh !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-components.html(build_html(), height=720, scrolling=False)
+components.html(build_html(), height=1200, scrolling=False)
