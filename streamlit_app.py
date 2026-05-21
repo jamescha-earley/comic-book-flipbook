@@ -288,28 +288,30 @@ HTML_TEMPLATE = r"""<!doctype html>
     const step = vh * STEP_FRACTION;
 
     if (direction > 0) {
-      if (scrollY >= maxY - 1) {
-        // At bottom — advance page
+      // Forward: if already at (or about to reach) the bottom, advance to next page.
+      if (scrollY + step >= maxY - 1) {
         if (current < PAGES.length - 1) {
           animating = true;
           current += 1;
           loadReaderPage(current, false);
-          // Briefly flag; the onload resets state
           setTimeout(() => { animating = false; updateHud(); }, 50);
+        } else {
+          // Last page: just snap to the very bottom.
+          scrollY = maxY;
+          applyScroll();
         }
       } else {
         scrollY = Math.min(maxY, scrollY + step);
         applyScroll();
       }
     } else {
-      if (scrollY <= 1) {
+      // Backward: if already at (or about to reach) the top, go to prev page.
+      if (scrollY - step <= 1) {
         if (current > 0) {
           const targetIdx = current - 1;
-          // If the previous page is in the page-view range, hand off to page mode
           if (targetIdx < PAGE_VIEW_LIMIT) {
-            // Exit read mode displaying current page first, then flip backward to target
+            // Hand off to page mode and flip back
             setReadMode(false);
-            // setReadMode(false) calls setStatic(current); now flip from current to target
             flipTo(targetIdx);
           } else {
             animating = true;
@@ -317,6 +319,10 @@ HTML_TEMPLATE = r"""<!doctype html>
             loadReaderPage(current, true);
             setTimeout(() => { animating = false; updateHud(); }, 50);
           }
+        } else {
+          // First page: snap to top.
+          scrollY = 0;
+          applyScroll();
         }
       } else {
         scrollY = Math.max(0, scrollY - step);
