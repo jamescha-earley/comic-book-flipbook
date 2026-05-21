@@ -243,11 +243,6 @@ HTML_TEMPLATE = r"""<!doctype html>
   let stepIdx = 0;
   let animating = false;
 
-  // Per-page uniform panel scale: same scale for every panel on a given page,
-  // so that panel-to-panel transitions are pure translate (true camera pan).
-  // Computed lazily once the page image has laid out.
-  const pagePanelScale = new Array(PAGES.length).fill(null);
-
   const src = (i) => PAGES[i].src;
   function setStatic(idx) { staticImg.src = src(idx); }
 
@@ -258,42 +253,21 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   function imgRect() { return staticImg.getBoundingClientRect(); }
 
-  function computePagePanelScale(pageIdx) {
-    const r = imgRect();
-    const dw = r.width, dh = r.height;
-    if (dw === 0 || dh === 0) return 1;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const panels = PAGES[pageIdx].panels;
-    if (!panels.length) return 1;
-    // For each panel, find the scale needed to fit it into ~94% of viewport.
-    // Use the MINIMUM across panels so every panel fits with the same scale.
-    let s = Infinity;
-    for (const p of panels) {
-      const fit = Math.min(vw / (p.w * dw), vh / (p.h * dh)) * 0.94;
-      s = Math.min(s, fit);
-    }
-    return Math.max(1, s);  // never zoom out below natural fit
-  }
-
-  function getPanelScale(pageIdx) {
-    if (pagePanelScale[pageIdx] == null) {
-      pagePanelScale[pageIdx] = computePagePanelScale(pageIdx);
-    }
-    return pagePanelScale[pageIdx];
-  }
-
   function transformForStep(step) {
     if (step.panelIdx === -1) {
       // Full page = natural fit, no transform
       return { tx: 0, ty: 0, s: 1 };
     }
     const panel = panelFor(step);
-    const s = getPanelScale(step.pageIdx);
     const r = imgRect();
     const dw = r.width, dh = r.height;
+    if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
+    const vw = window.innerWidth, vh = window.innerHeight;
+    // Per-panel scale: fit each panel to ~92% of viewport
+    const s = Math.min(vw / (panel.w * dw), vh / (panel.h * dh)) * 0.92;
     const cx = (panel.x + panel.w / 2) * dw;
     const cy = (panel.y + panel.h / 2) * dh;
-    // Translate (in screen pixels) so panel center lands at viewport center.
+    // Translate so panel center lands at viewport center
     const tx = -(cx - dw / 2) * s;
     const ty = -(cy - dh / 2) * s;
     return { tx, ty, s };
@@ -355,8 +329,6 @@ HTML_TEMPLATE = r"""<!doctype html>
         if (!forward) setStatic(newStep.pageIdx);
         flipper.classList.remove("active", "flip-forward", "flip-backward");
         stepIdx = newIdx;
-        // Recompute panel scale for the new page
-        pagePanelScale[newStep.pageIdx] = null;
         if (newStep.panelIdx !== -1) {
           // Smoothly camera-pan into the target panel after landing
           requestAnimationFrame(() => {
@@ -454,8 +426,6 @@ HTML_TEMPLATE = r"""<!doctype html>
   window.addEventListener("resize", () => {
     clearTimeout(resizeT);
     resizeT = setTimeout(() => {
-      // Invalidate all per-page cached scales (they depend on viewport size)
-      for (let i = 0; i < pagePanelScale.length; i++) pagePanelScale[i] = null;
       const step = STEPS[stepIdx];
       if (step.panelIdx !== -1) applyStepTransform(step, false);
     }, 120);
