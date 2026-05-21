@@ -144,7 +144,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .nav.prev { left: 12px; } .nav.next { right: 12px; }
 
   .topbar {
-    position: fixed; top: 12px; right: 12px;
+    position: fixed; bottom: 12px; right: 12px;
     display: flex; gap: 8px; z-index: 11;
   }
   .topbar button {
