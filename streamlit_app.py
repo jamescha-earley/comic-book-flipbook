@@ -301,8 +301,10 @@ HTML_TEMPLATE = r"""<!doctype html>
     const dw = r.width, dh = r.height;
     if (dw === 0 || dh === 0) return { tx: 0, ty: 0, s: 1 };
     const vw = window.innerWidth, vh = window.innerHeight;
-    // Fit stop into ~95% of viewport
-    const s = Math.min(vw / (stop.w * dw), vh / (stop.h * dh)) * 0.95;
+    // Zoom factor: >1 means stop content overflows the viewport slightly
+    // (clipped by .reader overflow:hidden). Tweak to taste.
+    const ZOOM = 1.20;
+    const s = Math.min(vw / (stop.w * dw), vh / (stop.h * dh)) * ZOOM;
     const cx = (stop.x + stop.w / 2) * dw;
     const cy = (stop.y + stop.h / 2) * dh;
     const tx = -(cx - dw / 2) * s;
