@@ -78,17 +78,18 @@ def get_image_dimensions(filename: str) -> tuple[int, int]:
 
 @st.cache_data(show_spinner=False)
 def build_html() -> str:
-    # Build pages data with base64 sources, labels, panels, and aspect ratios
+    # Build pages data with base64 sources, labels, panels, and explicit dims
     pages_data = []
     for fn, lbl in PAGES:
         w, h = get_image_dimensions(fn)
-        aspect = h / w  # imageHeight / imageWidth for OSD coordinate conversion
         b64 = encode_page(fn)
         panels = PANELS.get(fn, [{"x": 0, "y": 0, "w": 1, "h": 1}])
         pages_data.append({
             "src": f"data:image/png;base64,{b64}",
             "label": lbl,
-            "aspect": aspect,
+            "width": w,
+            "height": h,
+            "aspect": h / w,
             "panels": panels,
         })
 
@@ -152,7 +153,8 @@ HTML_TEMPLATE = r"""<!doctype html>
   <div class="nav-hint left">&#8249;</div>
   <div class="nav-zone right" id="nav-right"></div>
   <div class="nav-hint right">&#8250;</div>
-  <div class="hud" id="hud"></div>
+  <div class="hud" id="hud">Loading…</div>
+  <div id="logbox" style="position:fixed;top:8px;right:8px;max-width:60%;max-height:50%;overflow:auto;background:rgba(0,0,0,.75);color:#9cf;font:11px/1.3 monospace;padding:6px 8px;border-radius:6px;z-index:200;display:none;"></div>
   <div class="instructions" id="instructions">Tap right / left or use arrow keys to navigate panels</div>
 
 <script src="https://cdn.jsdelivr.net/npm/openseadragon@5.0/build/openseadragon/openseadragon.min.js"></script>
@@ -166,6 +168,19 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   const hud = document.getElementById('hud');
   const instructions = document.getElementById('instructions');
+  const logbox = document.getElementById('logbox');
+
+  function log(msg) {
+    console.log('[osd]', msg);
+    if (logbox) {
+      logbox.style.display = 'block';
+      const line = document.createElement('div');
+      line.textContent = msg;
+      logbox.appendChild(line);
+      logbox.scrollTop = logbox.scrollHeight;
+    }
+  }
+  window.addEventListener('error', function(e) { log('JS error: ' + e.message); });
 
   // Fade out instructions after 4 seconds
   setTimeout(() => { instructions.style.opacity = '0'; }, 4000);
@@ -203,58 +218,71 @@ HTML_TEMPLATE = r"""<!doctype html>
     return new OpenSeadragon.Rect(0, 0, 1, aspect);
   }
 
-  function initViewer() {
-    viewer = OpenSeadragon({
-      id: 'viewer',
-      prefixUrl: 'https://cdn.jsdelivr.net/npm/openseadragon@5.0/build/openseadragon/images/',
-      tileSources: {
-        type: 'image',
-        url: PAGES[currentPage].src,
-      },
-      showNavigationControl: false,
-      showNavigator: false,
-      animationTime: 0.6,
-      springStiffness: 8,
-      visibilityRatio: 0.5,
-      minZoomLevel: 0.5,
-      maxZoomLevel: 10,
-      gestureSettingsMouse: {
-        scrollToZoom: false,
-        clickToZoom: false,
-        dblClickToZoom: false,
-        flickEnabled: false,
-      },
-      gestureSettingsTouch: {
-        scrollToZoom: false,
-        clickToZoom: false,
-        dblClickToZoom: false,
-        pinchToZoom: true,
-        flickEnabled: false,
-      },
-      gestureSettingsPen: {
-        scrollToZoom: false,
-        clickToZoom: false,
-        dblClickToZoom: false,
-      },
-      // Disable keyboard defaults so our own handler works
-      defaultZoomLevel: 0,
-      immediateRender: true,
-    });
+  function pageTileSource(pageIdx) {
+    // Custom "single-image" tile source with explicit dims — skips OSD's
+    // image-load step which is slow with multi-MB base64 data URLs.
+    const p = PAGES[pageIdx];
+    return {
+      width: p.width,
+      height: p.height,
+      tileSize: Math.max(p.width, p.height),
+      minLevel: 0,
+      maxLevel: 0,
+      getTileUrl: function() { return p.src; },
+    };
+  }
 
-    viewer.addHandler('open', function() {
-      // Start with full page view
-      viewer.viewport.fitBounds(getFullPageBounds(currentPage), true);
-      updateHud();
-    });
+  function initViewer() {
+    log('Initializing OpenSeadragon viewer...');
+    if (typeof OpenSeadragon === 'undefined') {
+      log('ERROR: OpenSeadragon library failed to load from CDN');
+      return;
+    }
+    try {
+      viewer = OpenSeadragon({
+        id: 'viewer',
+        prefixUrl: 'https://cdn.jsdelivr.net/npm/openseadragon@5.0/build/openseadragon/images/',
+        tileSources: pageTileSource(currentPage),
+        showNavigationControl: false,
+        showNavigator: false,
+        animationTime: 0.6,
+        springStiffness: 8,
+        visibilityRatio: 0.5,
+        minZoomLevel: 0.5,
+        maxZoomLevel: 10,
+        gestureSettingsMouse: {
+          scrollToZoom: false, clickToZoom: false, dblClickToZoom: false, flickEnabled: false,
+        },
+        gestureSettingsTouch: {
+          scrollToZoom: false, clickToZoom: false, dblClickToZoom: false, pinchToZoom: true, flickEnabled: false,
+        },
+        gestureSettingsPen: {
+          scrollToZoom: false, clickToZoom: false, dblClickToZoom: false,
+        },
+        defaultZoomLevel: 0,
+        immediateRender: true,
+      });
+
+      viewer.addHandler('open', function() {
+        log('Page open. Fitting full page first.');
+        viewer.viewport.fitBounds(getFullPageBounds(currentPage), true);
+        updateHud();
+      });
+      viewer.addHandler('open-failed', function(e) {
+        log('open-failed: ' + (e && e.message ? e.message : JSON.stringify(e)));
+      });
+      viewer.addHandler('tile-load-failed', function(e) {
+        log('tile-load-failed: ' + (e && e.message ? e.message : 'unknown'));
+      });
+    } catch (err) {
+      log('Init error: ' + err.message);
+    }
   }
 
   function openPage(pageIdx, startPanel) {
     currentPage = pageIdx;
     currentPanel = startPanel;
-    viewer.open({
-      type: 'image',
-      url: PAGES[pageIdx].src,
-    });
+    viewer.open(pageTileSource(pageIdx));
     viewer.addOnceHandler('open', function() {
       if (currentPanel >= 0) {
         viewer.viewport.fitBounds(getPanelBounds(currentPage, currentPanel), false);
@@ -359,4 +387,4 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-components.html(build_html(), height=920, scrolling=False)
+components.html(build_html(), height=720, scrolling=False)
