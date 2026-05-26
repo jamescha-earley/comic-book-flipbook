@@ -158,6 +158,37 @@ HTML_TEMPLATE = r"""<!doctype html>
     backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1);
     transition: opacity 1.5s ease;
   }
+  .cover-cta {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+    z-index: 200; text-align: center; pointer-events: none;
+    animation: ctaPulse 2s ease-in-out infinite;
+  }
+  .cover-cta .cta-box {
+    background: rgba(0,0,0,0.75); border: 1px solid rgba(41,171,226,0.6);
+    border-radius: 12px; padding: 14px 28px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 24px rgba(41,171,226,0.25);
+  }
+  .cover-cta .cta-text {
+    font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 4px;
+  }
+  .cover-cta .cta-sub {
+    font-size: 12px; color: rgba(255,255,255,0.7);
+  }
+  .cover-cta .cta-arrow {
+    font-size: 28px; color: rgba(41,171,226,0.9); margin-top: 8px;
+    display: inline-block;
+    animation: ctaBounce 1.5s ease-in-out infinite;
+  }
+  @keyframes ctaPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.85; }
+  }
+  @keyframes ctaBounce {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(6px); }
+  }
+  .cover-cta.hidden { opacity: 0; transition: opacity 0.5s ease; pointer-events: none; animation: none; }
 </style>
 </head>
 <body>
@@ -168,6 +199,13 @@ HTML_TEMPLATE = r"""<!doctype html>
   <div class="nav-hint right">&#8250;</div>
   <div class="hud" id="hud">Loading…</div>
   <div class="instructions" id="instructions">Tap right / left or use arrow keys to navigate panels</div>
+  <div class="cover-cta" id="cover-cta">
+    <div class="cta-box">
+      <div class="cta-text">Tap or swipe to read</div>
+      <div class="cta-sub">Use arrow keys or tap left/right</div>
+      <div class="cta-arrow">&#8594;</div>
+    </div>
+  </div>
 
 <script src="https://cdn.jsdelivr.net/npm/openseadragon@5.0/build/openseadragon/openseadragon.min.js"></script>
 <script>
@@ -180,12 +218,19 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   const hud = document.getElementById('hud');
   const instructions = document.getElementById('instructions');
+  const coverCta = document.getElementById('cover-cta');
 
   function log(msg) { console.log('[osd]', msg); }
   window.addEventListener('error', function(e) { console.error('[osd] JS error:', e.message); });
 
   // Fade out instructions after 4 seconds
   setTimeout(() => { instructions.style.opacity = '0'; }, 4000);
+
+  function hideCoverCta() {
+    if (coverCta && !coverCta.classList.contains('hidden')) {
+      coverCta.classList.add('hidden');
+    }
+  }
 
   function updateHud() {
     const page = PAGES[currentPage];
@@ -296,6 +341,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   }
 
   function goNext() {
+    hideCoverCta();
     const page = PAGES[currentPage];
     const totalPanels = page.panels.length;
 
@@ -323,6 +369,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   }
 
   function goPrev() {
+    hideCoverCta();
     if (currentPanel > 0) {
       currentPanel--;
       viewer.viewport.fitBounds(getPanelBounds(currentPage, currentPanel), false);
