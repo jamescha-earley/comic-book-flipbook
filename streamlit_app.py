@@ -18,14 +18,23 @@ from PIL import Image
 # --- Page definitions with panel rectangles (fractional coords: x, y, w, h in 0..1) ---
 
 PAGES = [
+    ("cover.png", "Cover"),
     ("p.2.png", "p. 2"),
     ("p.3-p4.png", "p. 3-4"),
     ("p.5.png", "p. 5"),
     ("p.6.png", "p. 6"),
     ("p.7.png", "p. 7"),
+    ("p.8.png", "p. 8"),
 ]
 
 PANELS = {
+    "cover.png": [],  # Full-page splash — no sub-panels
+    "p.8.png": [
+        {"x": 0.02, "y": 0.03, "w": 0.98, "h": 0.30},  # Intro + Digital Prison (Torrent, AppDev, Engineer)
+        {"x": 0.02, "y": 0.33, "w": 0.98, "h": 0.30},  # Incompatibility Curse (Dr. Legacy, Analysta, DataSci)
+        {"x": 0.02, "y": 0.60, "w": 0.98, "h": 0.27},  # The Lock Out (Silo, Administrator, Architecia)
+        {"x": 0.02, "y": 0.88, "w": 0.98, "h": 0.12},  # Summit 26 CTA banner
+    ],
     "p.2.png": [
         {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.21},
         {"x": 0.02, "y": 0.23, "w": 0.96, "h": 0.22},
@@ -291,6 +300,13 @@ HTML_TEMPLATE = r"""<!doctype html>
     const totalPanels = page.panels.length;
 
     if (currentPanel < 0) {
+      if (totalPanels === 0) {
+        // No panels on this page — advance to next page directly
+        if (currentPage < PAGES.length - 1) {
+          openPage(currentPage + 1, -1);
+        }
+        return;
+      }
       // Currently on full page view -> first panel
       currentPanel = 0;
       viewer.viewport.fitBounds(getPanelBounds(currentPage, 0), false);
@@ -317,10 +333,10 @@ HTML_TEMPLATE = r"""<!doctype html>
       viewer.viewport.fitBounds(getFullPageBounds(currentPage), false);
       updateHud();
     } else if (currentPanel < 0 && currentPage > 0) {
-      // Full view -> last panel of previous page
+      // Full view -> last panel of previous page (or its full view if no panels)
       const prevPage = currentPage - 1;
       const lastPanel = PAGES[prevPage].panels.length - 1;
-      openPage(prevPage, lastPanel);
+      openPage(prevPage, lastPanel >= 0 ? lastPanel : -1);
     }
   }
 
